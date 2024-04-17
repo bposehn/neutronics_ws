@@ -29,16 +29,16 @@ psibar = np.linspace(0, 1, num_psibar)
 
 lambda_values = 1 - psibar**2
 lambda_curve = PiecewiseCurve(psibar, lambda_values) # other args here ? 
-lambda_profile = LambdaCurveProfile(psibar, lambda_curve)
+# lambda_profile = LambdaCurveProfile(psibar, lambda_curve)
 
 ext_psi_scale_loc= [0.9999, 0.0]
 
 out_folder = 'out'
 
-soakscale = None # Can just use 0 and ext psi for file
+soakscale = 0 # Can just use 0 and ext psi for file
 psi_lim_in = 0
 
-scalars_df = pd.read_csv(SCALARS_TABLE_PATH)
+scalars_df = pd.read_csv(SCALARS_TABLE_PATH, delimiter='\t')
 
 all_run_params = []
 for i_row, row in scalars_df.iterrows():
@@ -49,8 +49,9 @@ for i_row, row in scalars_df.iterrows():
     run_params = LambdaAndBetaPol1Params(out_folder=out_folder, out_file=timestep_str, geom_file=geom_file,
                                          ext_psi_scale_loc=ext_psi_scale_loc, gun_femm_file=ext_psi_file,
                                          gunscale=GUNSCALE, soak_file=ext_psi_file, soakscale=soakscale,
-                                         lambda_curve=lambda_profile, Ishaft_in=1e6*row['Ishaft(MA)'],
+                                         lambda_curve=lambda_curve, Ishaft_in=1e6*row['Ishaft(MA)'],
                                          Ipl_in=1e6*row['Ipl'], beta_pol1_in=row['betap1'], psi_lim_in=psi_lim_in)
     all_run_params.append(run_params)
 
-RunFlagships(all_run_params)
+RunFlagships(run_params)
+#RunFlagships(all_run_params)
