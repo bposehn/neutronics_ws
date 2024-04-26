@@ -34,7 +34,7 @@ lambda_curve = PiecewiseCurve(psibar, lambda_values)
 
 ext_psi_scale_loc= [0.9999, 0.0] # Shouldn't matter as just setting scale to 1
 out_folder = 'out'
-soakscale = 0 # Can just use 0 and ext psi for file
+soakscale = 0 
 psi_lim_in = 0
 
 scalars_df = pd.read_csv(SCALARS_TABLE_PATH, delimiter='\t')
@@ -54,17 +54,17 @@ for i_row, row in scalars_df.iterrows():
     #                                      Ishaft_in=1e6*row['Ishaft(MA)'], Ipl_in=1e6*row['Ipl'], beta_pol1_in=row['betap1'],
     #                                      psi_lim_in=psi_lim_in, expected_opoint=[0.5, 0], verbosity=3)
     
-    run_params = FluxConstrainedLambdaAndBetaPol1Params(out_folder=out_folder, out_file=timestep_str, geom_file=geom_file,
-                                        ext_psi_scale_loc=ext_psi_scale_loc, gun_femm_file=ext_psi_file, flux_setpoint=PSI_AXIS_SETPOINT,
-                                        soak_file=ext_psi_file, soakscale=soakscale, lambda_curve=lambda_curve,
-                                        Ishaft_in=1e6*row['Ishaft(MA)'], Ipl_in=1e6*row['Ipl'], beta_pol1_in=0,
-                                        psi_lim_in=psi_lim_in, expected_opoint=[0.5, 0], verbosity=3)
+    # run_params = FluxConstrainedLambdaAndBetaPol1Params(out_folder=out_folder, out_file=timestep_str+'.hdf5', geom_file=geom_file,
+    #                                     ext_psi_scale_loc=ext_psi_scale_loc, gun_femm_file=ext_psi_file, flux_setpoint=PSI_AXIS_SETPOINT,
+    #                                     soak_file=ext_psi_file, soakscale=soakscale, lambda_curve=lambda_curve,
+    #                                     Ishaft_in=1e6*row['Ishaft(MA)'], Ipl_in=1e6*row['Ipl'], beta_pol1_in=row['betap1'],
+    #                                     psi_lim_in=psi_lim_in, expected_opoint=[0.5, 0], verbosity=3)
     
-    # run_params = LambdaAndBetaPol1Params(out_folder=out_folder, out_file=timestep_str, geom_file=geom_file,
-    #                                      ext_psi_scale_loc=ext_psi_scale_loc, gunscale=150e-3, gun_femm_file=ext_psi_file, 
-    #                                      soak_file=ext_psi_file, soakscale=soakscale, lambda_curve=lambda_curve,
-    #                                      Ishaft_in=1e6*row['Ishaft(MA)'], Ipl_in=1e6*row['Ipl'], beta_pol1_in=row['betap1'],
-    #                                      psi_lim_in=psi_lim_in, verbosity=3, expected_opoint=[0.5, 0])
+    run_params = LambdaAndBetaPol1Params(out_folder=out_folder, out_file=timestep_str+'.hdf5', geom_file=geom_file,
+                                          ext_psi_scale_loc=ext_psi_scale_loc, gunscale=-150e-3, gun_femm_file=ext_psi_file, 
+                                         soak_file=ext_psi_file, soakscale=soakscale, lambda_curve=lambda_curve,
+                                         Ishaft_in=1e6*row['Ishaft(MA)'], Ipl_in=1e6*row['Ipl'], beta_pol1_in=row['betap1'],
+                                         psi_lim_in=psi_lim_in, verbosity=3, expected_opoint=[0.5, 0])
 
     # RunFlagships(run_params)
     # # all_run_params.append(run_params)
@@ -73,6 +73,7 @@ for i_row, row in scalars_df.iterrows():
         RunFlagships(run_params, write_history=True)
         breakpoint()
     except Exception as e:
+        breakpoint()
         print(e)
 
 # RunFlagships(run_params)
