@@ -36,7 +36,8 @@ def get_neutron_yield_df():
         data[i_equil, 1] = total_neutron_yield
 
     df = pd.DataFrame(data, columns=column_names)
-
+    df = df.sort_values(by='time(s)')
+    
     return df
 
 def get_nes_plasma_dist_df(nes_plasma_dists: np.ndarray):
@@ -54,6 +55,7 @@ def get_nes_plasma_dist_df(nes_plasma_dists: np.ndarray):
                                                                                      T_e_callable, nes_plasma_dist)
 
     df = pd.DataFrame(data, columns=columns_names)
+    df = df.sort_values(by='time(s)')
 
     return df
 
@@ -69,13 +71,12 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
     equil_timesteps = equil_timesteps[equil_timesteps_order]    
 
     num_chord_points = 1000
-    breakpoint()
     yields_along_chord = np.empty((len(equil_filepaths_past_min_timestep), len(nes_plasma_dists), num_chord_points))
     Ts_along_chord = np.copy(yields_along_chord)
 
     for i_equil, equil_name in enumerate(equil_filepaths_past_min_timestep):
         parser = BaseFlagshipsParser.create(EQUIL_DIR, equil_name)
-        if i_equil == len(equil_timesteps):
+        if i_equil == len(equil_timesteps) - 1:
             timestep = equil_timesteps[i_equil] - equil_timesteps[i_equil - 1]
         else:
             timestep = equil_timesteps[i_equil + 1] - equil_timesteps[i_equil]
@@ -91,7 +92,8 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
     os.makedirs(plot_output_dir, exist_ok=True)
 
     for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-        plt.hist(Ts_along_chord[:, i_nes_plasma_dist, :], weights=yields_along_chord[:, i_nes_plasma_dist, :], bins=ion_temp_bins)
+        plt.hist(Ts_along_chord[:, i_nes_plasma_dist, :].flatten(),  \
+                 weights=yields_along_chord[:, i_nes_plasma_dist, :].flatten(), bins=ion_temp_bins)
         plt.xlabel('T_i (eV)')
         plt.ylabel('Neutron Yield')
         plt.title(f'Neutron Temp in Last 10us of Shot\nNES Dist to Plasma: {nes_plasma_dist}m')
@@ -110,7 +112,7 @@ def generate_outputs():
 
     # Total neutron production yield from a shot
     total_neutron_production = integrate.trapezoid(neutron_yield_df['neutron rate(s^-1)'], neutron_yield_df['time(s)'])
-    with open('total_neutron_production.txt', 'w') as f:
+    with open(os.path.join(OUTPUT_DIR, 'total_neutron_production.txt'), 'w') as f:
         f.write(str(total_neutron_production))
 
     # NES
@@ -137,7 +139,7 @@ def generate_outputs():
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
     min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
-    nes_hists_dirname = os.path.join(OUTPUT_DIR), 'nes_final_10us_hists'
+    nes_hists_dirname = os.path.join(OUTPUT_DIR, 'nes_final_10us_hists')
     ion_temp_bins = np.arange(1, 11)*1.0e3
 
     get_nes_temperature_hists(nes_plasma_dists, min_timestep, ion_temp_bins, nes_hists_dirname)
