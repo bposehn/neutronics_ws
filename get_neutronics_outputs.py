@@ -18,6 +18,8 @@ PSIBAR_PROFILE = np.linspace(0, 1, 101)
 BASE_T_e = 50 + 250*PSIBAR_PROFILE
 BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
 
+BASE_NES_DIST = CHORD['dist_to_plasma']
+
 BASE_T_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_T_e, fill_value='extrapolate')
 BASE_n_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_n_e, fill_value='extrapolate')
 
@@ -68,9 +70,10 @@ def get_nes_plasma_dist_df(nes_plasma_dists: np.ndarray):
 
         n_e_profile = get_n_e_callable_at_time(equil_time)
         t_e_profile = get_T_e_callable_at_time(equil_time)
+        base_distance_spectrometer_output = parser.calc_DD_neutron_spectrometer_output(CHORD, n_e_profile, t_e_profile)
+
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-            data[i_equil, 1+i_nes_plasma_dist] = parser.calc_DD_neutron_spectrometer_output(CHORD, n_e_profile,\
-                                                                                     t_e_profile, nes_plasma_dist)
+            data[i_equil, 1+i_nes_plasma_dist] = base_distance_spectrometer_output * (BASE_NES_DIST**2 / nes_plasma_dist**2)
 
     df = pd.DataFrame(data, columns=columns_names)
     df = df.sort_values(by='time(s)')
@@ -102,20 +105,27 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
             timestep_0 = equil_timesteps[i_equil - 1]
             timestep_1 = equil_timesteps[i_equil]
 
+        n_e_profile_0 = get_n_e_callable_at_time(timestep_0)
+        T_e_profile_0 = get_T_e_callable_at_time(timestep_0)
+        base_nes_neutron_flux_along_chord_0, T_along_chord_0 = \
+            parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_0, T_e_profile_0)
+        
+        n_e_profile_1 = get_n_e_callable_at_time(timestep_1)
+        T_e_profile_1 = get_T_e_callable_at_time(timestep_1)
+        base_nes_neutron_flux_along_chord_1, T_along_chord_1 = \
+            parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, T_e_profile_1)
+
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-            n_e_profile_0 = get_n_e_callable_at_time(timestep_0)
-            T_e_profile_0 = get_T_e_callable_at_time(timestep_0)
-            nes_neutron_flux_along_chord_0, T_along_chord_0 = \
-                parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_0, T_e_profile_0, nes_plasma_dist)
-            
-            n_e_profile_1 = get_n_e_callable_at_time(timestep_1)
-            T_e_profile_1 = get_T_e_callable_at_time(timestep_1)
-            nes_neutron_flux_along_chord_1, T_along_chord_1 = \
-                parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, T_e_profile_1, nes_plasma_dist)
-            
+            nes_neutron_flux_along_chord_0 = base_nes_neutron_flux_along_chord_0 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
+            nes_neutron_flux_along_chord_1 = base_nes_neutron_flux_along_chord_1 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
+
             #Integrate neutron flux over time to get yield
             yields_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (nes_neutron_flux_along_chord_1 + nes_neutron_flux_along_chord_0) * (timestep_1 - timestep_0)
             Ts_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (T_along_chord_0 + T_along_chord_1)
+
+            # TODO determine if it is a reasonable assumption to say that all neutrons produced at a point in a given time interval can be the assumed as the average
+            # print(f'mean Rel T change: {np.nanmean(abs(T_along_chord_0 - T_along_chord_1)/(0.5*(T_along_chord_0 + T_along_chord_1)))}')
+            # print(f'mean Rel nflux change: {np.nanmean(abs(nes_neutron_flux_along_chord_0 - nes_neutron_flux_along_chord_1)/(0.5*(nes_neutron_flux_along_chord_0 + nes_neutron_flux_along_chord_1)))}')
 
     os.makedirs(plot_output_dir, exist_ok=True)
 
@@ -152,7 +162,9 @@ def generate_outputs():
     
     # Peak neutron rate at spectrometer
     peak_nes_rates = nes_plasma_dist_df.loc[:, nes_plasma_dist_df.columns != 'time(s)'].max()
-    peak_nes_rates.to_csv(os.path.join(OUTPUT_DIR,'peak_nes_rates.csv'), index=False)
+    peak_nes_rates_df = pd.DataFrame(np.hstack((nes_plasma_dists[np.newaxis].T, peak_nes_rates.values[np.newaxis].T)), 
+                                     columns=['NES Plasma Distance (m)', 'Peak NES Rate (1/s)'])
+    peak_nes_rates_df.to_csv(os.path.join(OUTPUT_DIR,'peak_nes_rates.csv'), index=False)
 
     # Plot of neutron rate at spectrometer vs compression time
     nes_rate_vs_time_dirname = os.path.join(OUTPUT_DIR, 'nes_rate_vs_time_plots')
