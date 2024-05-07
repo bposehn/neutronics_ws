@@ -11,15 +11,28 @@ from flagships.post_processing.ParseFlagshipsFile import BaseFlagshipsParser
 CHORD = {'r_collimator': 0.0075, 'dist_to_plasma': 3, 'chord_name': 'NES_test', 'r1': 0.08270806550754287, \
          'r2': 1.4548300691146028, 'x1': -0.03204, 'x2': 0.9022, 'y1': -0.07625, 'y2': 1.1413, 'z1': 0.0, 'z2': 2.0}
 
-psibar_profile = np.linspace(0, 1, 101)
-T_e = 50 + 250*psibar_profile
-n_e = 4e19*(1 - (2/3)*psibar_profile - (1/3)*psibar_profile**3)
-
-T_e_callable = interpolate.interp1d(psibar_profile, T_e, fill_value='extrapolate')
-n_e_callable = interpolate.interp1d(psibar_profile, n_e, fill_value='extrapolate')
-
-EQUIL_DIR = 'equil'
+EQUIL_DIR = 'csim_027c_equil'
 OUTPUT_DIR = 'neutron_calcs_out'
+
+PSIBAR_PROFILE = np.linspace(0, 1, 101)
+BASE_T_e = 50 + 250*PSIBAR_PROFILE
+BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
+
+BASE_T_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_T_e, fill_value='extrapolate')
+BASE_n_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_n_e, fill_value='extrapolate')
+
+PLASMA_DATA_CSV = 'data/csim_027c/plasma_data.csv'
+PLASMA_DATA_DF = pd.read_csv(PLASMA_DATA_CSV)
+CV_OF_T_INTERPD = interpolate.interp1d(PLASMA_DATA_DF['t(s)'], PLASMA_DATA_DF['CV'], bounds_error=False, \
+                                       fill_value=(PLASMA_DATA_DF['CV'].iloc[0], PLASMA_DATA_DF['CV'].iloc[-1]))
+T_GAIN_OF_T_INTERPD = interpolate.interp1d(PLASMA_DATA_DF['t(s)'], PLASMA_DATA_DF['T_gain'], bounds_error=False, \
+                                    fill_value=(PLASMA_DATA_DF['T_gain'].iloc[0], PLASMA_DATA_DF['T_gain'].iloc[-1]))
+
+def get_T_e_callable_at_time(time_s: float):
+    return lambda psibar : T_GAIN_OF_T_INTERPD(time_s) * BASE_T_e_CALLABLE(psibar)
+
+def get_n_e_callable_at_time(time_s: float):
+    return lambda psibar : CV_OF_T_INTERPD(time_s) * BASE_n_e_CALLABLE(psibar)
 
 def get_neutron_yield_df():
     equil_filepaths = [equil_name for equil_name in os.listdir(EQUIL_DIR) if equil_name.endswith('.hdf5')]
@@ -29,8 +42,10 @@ def get_neutron_yield_df():
 
     for i_equil, equil_name in enumerate(equil_filepaths):
         parser = BaseFlagshipsParser.create(EQUIL_DIR, equil_name)
-        total_neutron_yield = parser.calc_total_DD_neutron_yield(n_e_callable, T_e_callable)
         equil_time = float(equil_name[-13:-5])
+        n_e_profile = get_n_e_callable_at_time(equil_time)
+        t_e_profile = get_T_e_callable_at_time(equil_time)
+        total_neutron_yield = parser.calc_total_DD_neutron_yield(n_e_profile, t_e_profile)
         
         data[i_equil, 0] = equil_time
         data[i_equil, 1] = total_neutron_yield
@@ -50,9 +65,12 @@ def get_nes_plasma_dist_df(nes_plasma_dists: np.ndarray):
         parser = BaseFlagshipsParser.create(EQUIL_DIR, equil_name)
         equil_time = float(equil_name[-13:-5])
         data[i_equil, 0] = equil_time
+
+        n_e_profile = get_n_e_callable_at_time(equil_time)
+        t_e_profile = get_T_e_callable_at_time(equil_time)
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-            data[i_equil, 1+i_nes_plasma_dist] = parser.calc_DD_neutron_spectrometer_output(CHORD, n_e_callable,\
-                                                                                     T_e_callable, nes_plasma_dist)
+            data[i_equil, 1+i_nes_plasma_dist] = parser.calc_DD_neutron_spectrometer_output(CHORD, n_e_profile,\
+                                                                                     t_e_profile, nes_plasma_dist)
 
     df = pd.DataFrame(data, columns=columns_names)
     df = df.sort_values(by='time(s)')
@@ -76,18 +94,28 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
 
     for i_equil, equil_name in enumerate(equil_filepaths_past_min_timestep):
         parser = BaseFlagshipsParser.create(EQUIL_DIR, equil_name)
-        if i_equil == len(equil_timesteps) - 1:
-            timestep = equil_timesteps[i_equil] - equil_timesteps[i_equil - 1]
+
+        if i_equil == 0:
+            timestep_0 = equil_timesteps[i_equil]
+            timestep_1 = equil_timesteps[i_equil + 1]
         else:
-            timestep = equil_timesteps[i_equil + 1] - equil_timesteps[i_equil]
+            timestep_0 = equil_timesteps[i_equil - 1]
+            timestep_1 = equil_timesteps[i_equil]
 
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-            # some of these values are none....
-            nes_neutron_flux_along_chord, T_along_chord = \
-                parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_callable, T_e_callable, nes_plasma_dist)
+            n_e_profile_0 = get_n_e_callable_at_time(timestep_0)
+            T_e_profile_0 = get_T_e_callable_at_time(timestep_0)
+            nes_neutron_flux_along_chord_0, T_along_chord_0 = \
+                parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_0, T_e_profile_0, nes_plasma_dist)
             
-            yields_along_chord[i_equil, i_nes_plasma_dist] = nes_neutron_flux_along_chord * timestep
-            Ts_along_chord[i_equil, i_nes_plasma_dist] = T_along_chord
+            n_e_profile_1 = get_n_e_callable_at_time(timestep_1)
+            T_e_profile_1 = get_T_e_callable_at_time(timestep_1)
+            nes_neutron_flux_along_chord_1, T_along_chord_1 = \
+                parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, T_e_profile_1, nes_plasma_dist)
+            
+            #Integrate neutron flux over time to get yield
+            yields_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (nes_neutron_flux_along_chord_1 + nes_neutron_flux_along_chord_0) * (timestep_1 - timestep_0)
+            Ts_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (T_along_chord_0 + T_along_chord_1)
 
     os.makedirs(plot_output_dir, exist_ok=True)
 
@@ -98,6 +126,7 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
         plt.ylabel('Neutron Yield')
         plt.title(f'Neutron Temp in Last 10us of Shot\nNES Dist to Plasma: {nes_plasma_dist}m')
         plt.savefig(os.path.join(plot_output_dir, f'{nes_plasma_dist}m.png'))
+        plt.clf()
 
 def generate_outputs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -105,25 +134,25 @@ def generate_outputs():
     neutron_yield_df = get_neutron_yield_df()
 
     # Plot of neutron production rate (neutrons/s) vs compression time
-    plt.scatter(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
+    plt.plot(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
     plt.xlabel('Compression Time (s)')
     plt.ylabel('Neutron Production Rate (1/s)')
+    plt.yscale('log')
     plt.savefig(os.path.join(OUTPUT_DIR, 'n_yield_vs_t.png'))
+    plt.clf()
 
     # Total neutron production yield from a shot
     total_neutron_production = integrate.trapezoid(neutron_yield_df['neutron rate(s^-1)'], neutron_yield_df['time(s)'])
     with open(os.path.join(OUTPUT_DIR, 'total_neutron_production.txt'), 'w') as f:
-        f.write(str(total_neutron_production))
+        f.write(str(int(total_neutron_production)))
 
     # NES
-        
     nes_plasma_dists = np.arange(3, 11)
-
     nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
     
     # Peak neutron rate at spectrometer
     peak_nes_rates = nes_plasma_dist_df.loc[:, nes_plasma_dist_df.columns != 'time(s)'].max()
-    peak_nes_rates.to_csv('peak_nes_rates.csv', index=False)
+    peak_nes_rates.to_csv(os.path.join(OUTPUT_DIR,'peak_nes_rates.csv'), index=False)
 
     # Plot of neutron rate at spectrometer vs compression time
     nes_rate_vs_time_dirname = os.path.join(OUTPUT_DIR, 'nes_rate_vs_time_plots')
@@ -135,7 +164,9 @@ def generate_outputs():
         plt.xlabel('time(s)')
         plt.ylabel('Neutron Rate at NES (1/s)')
         plt.title(f'NES Dist to Plasma: {nes_distance_str}')
+        plt.yscale('log')
         plt.savefig(os.path.join(nes_rate_vs_time_dirname, nes_distance_str))
+        plt.clf()
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
     min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
