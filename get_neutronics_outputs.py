@@ -6,15 +6,19 @@ import matplotlib.pyplot as plt
 from scipy import integrate
 from scipy import interpolate
 
-from flagships.post_processing.ParseFlagshipsFile import BaseFlagshipsParser
+from flagships.post_processing.ParseFlagshipsFile import BaseFlagshipsParser, FlagshipsParser2
 
-CHORD = {'r_collimator': 0.0075, 'dist_to_plasma': 3, 'chord_name': 'NES_test', 'r1': 0.08270806550754287, \
+UNEXTENDED_CHORD = {'r_collimator': 0.0075, 'dist_to_plasma': 3, 'chord_name': 'NES_test', 'r1': 0.08270806550754287, \
          'r2': 1.4548300691146028, 'x1': -0.03204, 'x2': 0.9022, 'y1': -0.07625, 'y2': 1.1413, 'z1': 0.0, 'z2': 2.0}
+
+MIN_REACTION_VESSEL_Z = -0.5767828282828283
+CHORD = FlagshipsParser2.extend_chord_to_z_value(UNEXTENDED_CHORD, MIN_REACTION_VESSEL_Z)
 
 EQUIL_DIR = 'csim_027c_equil'
 OUTPUT_DIR = 'neutron_calcs_out'
 
 PSIBAR_PROFILE = np.linspace(0, 1, 101)
+# BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
 BASE_T_e = 50 + 250*PSIBAR_PROFILE
 BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
 
@@ -115,6 +119,8 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
         base_nes_neutron_flux_along_chord_1, T_along_chord_1 = \
             parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, T_e_profile_1)
 
+        print(f'Max temperature seen by chord: {max(np.nanmax(T_along_chord_0), np.nanmax(T_along_chord_1))}')
+
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
             nes_neutron_flux_along_chord_0 = base_nes_neutron_flux_along_chord_0 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
             nes_neutron_flux_along_chord_1 = base_nes_neutron_flux_along_chord_1 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
@@ -124,8 +130,14 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
             Ts_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (T_along_chord_0 + T_along_chord_1)
 
             # TODO determine if it is a reasonable assumption to say that all neutrons produced at a point in a given time interval can be the assumed as the average
+            
+            
+            # Get that T changes mean ~20% as much as nflux changes, max 
             # print(f'mean Rel T change: {np.nanmean(abs(T_along_chord_0 - T_along_chord_1)/(0.5*(T_along_chord_0 + T_along_chord_1)))}')
             # print(f'mean Rel nflux change: {np.nanmean(abs(nes_neutron_flux_along_chord_0 - nes_neutron_flux_along_chord_1)/(0.5*(nes_neutron_flux_along_chord_0 + nes_neutron_flux_along_chord_1)))}')
+
+            print(f'max Rel T change: {np.nanmax(abs(T_along_chord_0 - T_along_chord_1)/(0.5*(T_along_chord_0 + T_along_chord_1)))}')
+            # print(f'max Rel nflux change: {np.nanmax(abs(nes_neutron_flux_along_chord_0 - nes_neutron_flux_along_chord_1)/(0.5*(nes_neutron_flux_along_chord_0 + nes_neutron_flux_along_chord_1)))}')
 
     os.makedirs(plot_output_dir, exist_ok=True)
 
@@ -143,6 +155,15 @@ def generate_outputs():
 
     neutron_yield_df = get_neutron_yield_df()
 
+    #Plot of peak ion temperature vs compression time
+    peak_ion_temps = np.array([get_T_e_callable_at_time(time)(1) for time in neutron_yield_df['time(s)']])
+    plt.plot(neutron_yield_df['time(s)'], peak_ion_temps*1e-3)
+    plt.xlabel('Compression Time (s)')
+    plt.ylabel('Peak Ion Temperature (keV)')
+    plt.yscale('log')
+    plt.savefig(os.path.join(OUTPUT_DIR, 'peak_T_i_vs_t.png'))
+    plt.clf()
+    
     # Plot of neutron production rate (neutrons/s) vs compression time
     plt.plot(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
     plt.xlabel('Compression Time (s)')
@@ -181,7 +202,8 @@ def generate_outputs():
         plt.clf()
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
-    min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
+    # min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
+    min_timestep = PLASMA_DATA_DF['t(s)'].max() - 10e-6
     nes_hists_dirname = os.path.join(OUTPUT_DIR, 'nes_final_10us_hists')
     ion_temp_bins = np.arange(1, 11)*1.0e3
 
