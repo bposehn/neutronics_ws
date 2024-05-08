@@ -96,49 +96,66 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
     equil_timesteps = equil_timesteps[equil_timesteps_order]    
 
     num_chord_points = 1000
-    yields_along_chord = np.empty((len(equil_filepaths_past_min_timestep), len(nes_plasma_dists), num_chord_points))
+
+    num_extra_time_resolution_pts = 500 # Extra bins between each timestep to get finer temperature resolution
+    yields_along_chord = np.empty(((len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_pts, \
+                                    len(nes_plasma_dists), num_chord_points))
     Ts_along_chord = np.copy(yields_along_chord)
 
-    for i_equil, equil_name in enumerate(equil_filepaths_past_min_timestep):
-        parser = BaseFlagshipsParser.create(EQUIL_DIR, equil_name)
+    for i_equil in range(len(equil_filepaths_past_min_timestep)-1):
+        equil_name_0 = equil_filepaths_past_min_timestep[i_equil]
+        equil_name_1 = equil_filepaths_past_min_timestep[i_equil + 1]
 
-        if i_equil == 0:
-            timestep_0 = equil_timesteps[i_equil]
-            timestep_1 = equil_timesteps[i_equil + 1]
-        else:
-            timestep_0 = equil_timesteps[i_equil - 1]
-            timestep_1 = equil_timesteps[i_equil]
+        parser_0 = BaseFlagshipsParser.create(EQUIL_DIR, equil_name_0)
+        parser_1 = BaseFlagshipsParser.create(EQUIL_DIR, equil_name_1)
+
+        timestep_0 = equil_timesteps[i_equil]
+        timestep_1 = equil_timesteps[i_equil + 1]
 
         n_e_profile_0 = get_n_e_callable_at_time(timestep_0)
         T_e_profile_0 = get_T_e_callable_at_time(timestep_0)
         base_nes_neutron_flux_along_chord_0, T_along_chord_0 = \
-            parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_0, T_e_profile_0)
+            parser_0.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_0, \
+                                                                    T_e_profile_0, num_chord_points=num_chord_points)
         
         n_e_profile_1 = get_n_e_callable_at_time(timestep_1)
         T_e_profile_1 = get_T_e_callable_at_time(timestep_1)
         base_nes_neutron_flux_along_chord_1, T_along_chord_1 = \
-            parser.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, T_e_profile_1)
+            parser_1.calc_DD_neutron_spectrometer_yield_and_temp_along_chord(CHORD, n_e_profile_1, \
+                                                                    T_e_profile_1, num_chord_points=num_chord_points)
 
         print(f'Max temperature seen by chord: {max(np.nanmax(T_along_chord_0), np.nanmax(T_along_chord_1))}')
 
+        T_slopes = (T_along_chord_1 - T_along_chord_0) / num_extra_time_resolution_pts
+        extra_time_resolution_dt = (timestep_1 - timestep_0) / num_extra_time_resolution_pts
+
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
-            nes_neutron_flux_along_chord_0 = base_nes_neutron_flux_along_chord_0 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
-            nes_neutron_flux_along_chord_1 = base_nes_neutron_flux_along_chord_1 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
+            nes_neutron_flux_along_chord_0 = \
+                base_nes_neutron_flux_along_chord_0 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
+            nes_neutron_flux_along_chord_1 = \
+                base_nes_neutron_flux_along_chord_1 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
 
-            #Integrate neutron flux over time to get yield
-            yields_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (nes_neutron_flux_along_chord_1 + nes_neutron_flux_along_chord_0) * (timestep_1 - timestep_0)
-            Ts_along_chord[i_equil, i_nes_plasma_dist] = 0.5 * (T_along_chord_0 + T_along_chord_1)
+            nes_neutron_flux_slopes = (nes_neutron_flux_along_chord_1 - nes_neutron_flux_along_chord_0) / \
+                                                                                 num_extra_time_resolution_pts
 
-            # TODO determine if it is a reasonable assumption to say that all neutrons produced at a point in a given time interval can be the assumed as the average
+            for i_time_resolution in range(num_extra_time_resolution_pts):
+                interpolated_neutron_flux_along_chord_0 = \
+                    nes_neutron_flux_along_chord_0 + (i_time_resolution * nes_neutron_flux_slopes)
+                interpolated_neutron_flux_along_chord_1 = \
+                    nes_neutron_flux_along_chord_0 + ((i_time_resolution + 1) * nes_neutron_flux_slopes)
+
+                interpolated_T_along_chord_0 = T_along_chord_0 + (i_time_resolution * T_slopes)
+                interpolated_T_along_chord_1 = T_along_chord_0 + ((i_time_resolution + 1) * T_slopes)
+
+                # print(f'max Rel T change: {np.nanmax(abs(interpolated_T_along_chord_1 - interpolated_T_along_chord_0)/(0.5*(interpolated_T_along_chord_1 + interpolated_T_along_chord_0)))}')
+
+                #Manually integrate neutron flux over time to get yield
+                yields_along_chord[i_equil*num_extra_time_resolution_pts + i_time_resolution, i_nes_plasma_dist] = \
+                    0.5 * extra_time_resolution_dt * \
+                        (interpolated_neutron_flux_along_chord_0 + interpolated_neutron_flux_along_chord_1) 
+                Ts_along_chord[i_equil*num_extra_time_resolution_pts + i_time_resolution, i_nes_plasma_dist] = \
+                    0.5 * (interpolated_T_along_chord_0 + interpolated_T_along_chord_1)
             
-            
-            # Get that T changes mean ~20% as much as nflux changes, max 
-            # print(f'mean Rel T change: {np.nanmean(abs(T_along_chord_0 - T_along_chord_1)/(0.5*(T_along_chord_0 + T_along_chord_1)))}')
-            # print(f'mean Rel nflux change: {np.nanmean(abs(nes_neutron_flux_along_chord_0 - nes_neutron_flux_along_chord_1)/(0.5*(nes_neutron_flux_along_chord_0 + nes_neutron_flux_along_chord_1)))}')
-
-            print(f'max Rel T change: {np.nanmax(abs(T_along_chord_0 - T_along_chord_1)/(0.5*(T_along_chord_0 + T_along_chord_1)))}')
-            # print(f'max Rel nflux change: {np.nanmax(abs(nes_neutron_flux_along_chord_0 - nes_neutron_flux_along_chord_1)/(0.5*(nes_neutron_flux_along_chord_0 + nes_neutron_flux_along_chord_1)))}')
-
     os.makedirs(plot_output_dir, exist_ok=True)
 
     for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
@@ -178,7 +195,8 @@ def generate_outputs():
         f.write(str(int(total_neutron_production)))
 
     # NES
-    nes_plasma_dists = np.arange(3, 11)
+    # nes_plasma_dists = np.arange(3, 11)
+    nes_plasma_dists = np.arange(3, 5)
     nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
     
     # Peak neutron rate at spectrometer
