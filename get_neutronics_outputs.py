@@ -1,12 +1,25 @@
 import os
+from typing import Callable
 
+import matplotlib.axes
+import matplotlib.contour
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 from scipy import integrate
 from scipy import interpolate
 
 from flagships.post_processing.ParseFlagshipsFile import BaseFlagshipsParser, FlagshipsParser2
+from flagships.post_processing.EquilibriumPlotting import Plot2ndOrderContour
+from flagships.Csharp.csharp_utils import asNetArray, asNumpyArray, set_debug_mode, append_gf_recon_dll_path
+
+import clr
+set_debug_mode(True)
+append_gf_recon_dll_path()
+clr.AddReference("GFRecon")
+from Reconstruction import FSPostProcessor, MagFieldCalculator, PsiBarCalculator, FlagshipsMeshHelper
+from Reconstruction import InterpArray, RZPoint, Contour, SurfaceAreaCalc, FunctionData, TriangleFuncSurface
 
 UNEXTENDED_CHORD = {'r_collimator': 0.0075, 'dist_to_plasma': 3, 'chord_name': 'NES_test', 'r1': 0.08270806550754287, \
          'r2': 1.4548300691146028, 'x1': -0.03204, 'x2': 0.9022, 'y1': -0.07625, 'y2': 1.1413, 'z1': 0.0, 'z2': 2.0}
@@ -97,10 +110,18 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
 
     num_chord_points = 1000
 
-    num_extra_time_resolution_pts = 500 # Extra bins between each timestep to get finer temperature resolution
+    num_extra_time_resolution_pts = 5 # Extra bins between each timestep to get finer temperature resolution
     yields_along_chord = np.empty(((len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_pts, \
                                     len(nes_plasma_dists), num_chord_points))
     Ts_along_chord = np.copy(yields_along_chord)
+
+    # timesteps = np.empty(((len(equil_filepaths_past_min_timestep)-1)*(num_extra_time_resolution_pts+1)))
+    # for i_timestep in range(len(equil_timesteps) - 1):
+    #     timesteps[i_timestep*(num_extra_time_resolution_pts+1):(i_timestep+1)*(num_extra_time_resolution_pts+1)] = np.linspace(equil_timesteps[i_timestep], equil_timesteps[i_timestep + 1], num_extra_time_resolution_pts+1)
+    
+    # chord_xs = np.linspace(CHORD['x1'], CHORD['x2'], num_chord_points)
+    # chord_ys = np.linspace(CHORD['y1'], CHORD['y2'], num_chord_points)
+    # chord_zs = np.linspace(CHORD['z1'], CHORD['z2'], num_chord_points)
 
     for i_equil in range(len(equil_filepaths_past_min_timestep)-1):
         equil_name_0 = equil_filepaths_past_min_timestep[i_equil]
@@ -163,12 +184,90 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
                  weights=yields_along_chord[:, i_nes_plasma_dist, :].flatten(), bins=ion_temp_bins)
         plt.xlabel('T_i (eV)')
         plt.ylabel('Neutron Yield')
+        plt.yscale('log')
         plt.title(f'Neutron Temp in Last 10us of Shot\nNES Dist to Plasma: {nes_plasma_dist}m')
         plt.savefig(os.path.join(plot_output_dir, f'{nes_plasma_dist}m.png'))
         plt.clf()
 
+def plot_function_of_psibar(ax: matplotlib.axes.Axes, parser: BaseFlagshipsParser, function_of_psibar: Callable[[float], float], colorbar_label='', n_contours=10, contour_values=None):
+    psibar_field = asNumpyArray(parser.GetPsiBarField().DOFValues)
+    function_field = function_of_psibar(psibar_field)
+
+    if contour_values == None:
+        contour_values = np.linspace(np.min(function_field), np.max(function_field), n_contours+1)[1:]
+
+    function_data = FunctionData(function_field, parser.cs_helper)
+
+    cmap = plt.cm.get_cmap('rainbow')
+    norm = matplotlib.colors.Normalize(vmin=min(contour_values), vmax=max(contour_values))
+    
+    for i_contour_value, contour_value in enumerate(contour_values):
+        color=cmap(norm(contour_value))
+        contours = parser.cs_helper.GetContours(contour_value, function_data)
+        # closed_contour = Contour.GetClosedContour(contours, parser.get_lcfs().OPoint.Point)
+        # closed_contour.PrepareForPlotting(function_data)
+        # Plot2ndOrderContour(parser.cs_helper, closed_contour, color=color, function=function_data, axes=ax)
+        for contour in contours:
+            if contour.IsClosed:
+                contour.PrepareForPlotting(function_data)
+                Plot2ndOrderContour(parser.cs_helper, contour, color=color, function=function_data, axes=ax)
+    
+    smap = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
+    plt.colorbar(mappable=smap, ax=ax, label=colorbar_label)
+
+def make_n_and_T_profile_plots():
+    equil_filepaths = [equil_name for equil_name in os.listdir(EQUIL_DIR) if equil_name.endswith('.hdf5')]
+    equil_timesteps = np.array([float(filepath[-13:-5]) for filepath in equil_filepaths])
+
+    equil_timesteps_order = np.argsort(equil_timesteps)
+
+    equil_filepaths = [equil_filepaths[i] for i in equil_timesteps_order]
+    equil_timesteps = equil_timesteps[equil_timesteps_order] 
+
+    n_pts = 100
+    chord_xs = np.linspace(CHORD['x1'], CHORD['x2'], n_pts)
+    chord_ys = np.linspace(CHORD['y1'], CHORD['y2'], n_pts)
+    chord_zs = np.linspace(CHORD['z1'], CHORD['z2'], n_pts)
+    chord_rs = np.sqrt(chord_xs**2 + chord_ys**2)
+
+    plot_loc_dir = 'n_and_T_profiles'
+    os.makedirs(os.path.join(OUTPUT_DIR, plot_loc_dir), exist_ok=True)
+
+    for i_equil, equil_filepath in enumerate(equil_filepaths):
+        t = equil_timesteps[i_equil]
+
+        n_e_callable = get_n_e_callable_at_time(t)
+        T_e_callable = get_T_e_callable_at_time(t)
+
+        parser =  BaseFlagshipsParser.create(EQUIL_DIR, equil_filepath)
+
+        edge_values = parser.m2.GetEdgePoints()
+
+        fig, axs = plt.subplots(1, 2, figsize=(15, 6))
+
+        neutron_lum_callable = lambda psibar: parser.calc_DD_neutron_luminosity(n_e_callable(psibar), T_e_callable(psibar))
+        
+        plot_function_of_psibar(axs[0], parser, neutron_lum_callable, colorbar_label='Neutron Luminosity (n s^-1 m^-3)')
+        plot_function_of_psibar(axs[1], parser, T_e_callable, colorbar_label='$T_i$ (eV)')
+
+        for i_axis in range(2):
+            axs[i_axis].plot(chord_rs, chord_zs, c='xkcd:hot pink', label='NES Chord')
+            axs[i_axis].plot(edge_values[:, 0], edge_values[:, 1], c='k')
+            axs[i_axis].set_xlabel('r(m)')
+            axs[i_axis].set_ylabel('z(m)')
+            axs[i_axis].legend()
+            axs[i_axis].set_xlim([np.min(edge_values[:, 0])-.1, np.max(edge_values[:, 0])+.1])
+            axs[i_axis].set_ylim([np.min(edge_values[:, 1])-.1, np.max(edge_values[:, 1])+.1])
+        
+        plt.suptitle(f'Compression time: {t}s')
+        plt.savefig(os.path.join(OUTPUT_DIR, plot_loc_dir, str(t)+'.png'))
+
 def generate_outputs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    make_n_and_T_profile_plots()
+
+    breakpoint()
 
     neutron_yield_df = get_neutron_yield_df()
 
