@@ -32,13 +32,15 @@ OUTPUT_DIR = 'neutron_calcs_out'
 
 PSIBAR_PROFILE = np.linspace(0, 1, 101)
 # BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
-BASE_T_e = 50 + 250*PSIBAR_PROFILE
+BASE_T_e = 50 + 250*(1-PSIBAR_PROFILE)
 BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
 
 BASE_NES_DIST = CHORD['dist_to_plasma']
 
-BASE_T_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_T_e, fill_value='extrapolate')
-BASE_n_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_n_e, fill_value='extrapolate')
+BASE_T_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_T_e, bounds_error=False, \
+                                         fill_value=(BASE_T_e[0], np.nan))
+BASE_n_e_CALLABLE = interpolate.interp1d(PSIBAR_PROFILE, BASE_n_e, bounds_error=False, \
+                                         fill_value=(BASE_n_e[0], np.nan))
 
 PLASMA_DATA_CSV = 'data/csim_027c/plasma_data.csv'
 PLASMA_DATA_DF = pd.read_csv(PLASMA_DATA_CSV)
@@ -109,19 +111,11 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
     equil_timesteps = equil_timesteps[equil_timesteps_order]    
 
     num_chord_points = 1000
-
-    num_extra_time_resolution_pts = 5 # Extra bins between each timestep to get finer temperature resolution
-    yields_along_chord = np.empty(((len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_pts, \
+    num_extra_time_resolution_bins = 500 # To get finer temperature resolution for numerical integration using midpoint method
+    
+    yields_along_chord = np.empty(((len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_bins, \
                                     len(nes_plasma_dists), num_chord_points))
     Ts_along_chord = np.copy(yields_along_chord)
-
-    # timesteps = np.empty(((len(equil_filepaths_past_min_timestep)-1)*(num_extra_time_resolution_pts+1)))
-    # for i_timestep in range(len(equil_timesteps) - 1):
-    #     timesteps[i_timestep*(num_extra_time_resolution_pts+1):(i_timestep+1)*(num_extra_time_resolution_pts+1)] = np.linspace(equil_timesteps[i_timestep], equil_timesteps[i_timestep + 1], num_extra_time_resolution_pts+1)
-    
-    # chord_xs = np.linspace(CHORD['x1'], CHORD['x2'], num_chord_points)
-    # chord_ys = np.linspace(CHORD['y1'], CHORD['y2'], num_chord_points)
-    # chord_zs = np.linspace(CHORD['z1'], CHORD['z2'], num_chord_points)
 
     for i_equil in range(len(equil_filepaths_past_min_timestep)-1):
         equil_name_0 = equil_filepaths_past_min_timestep[i_equil]
@@ -147,8 +141,8 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
 
         print(f'Max temperature seen by chord: {max(np.nanmax(T_along_chord_0), np.nanmax(T_along_chord_1))}')
 
-        T_slopes = (T_along_chord_1 - T_along_chord_0) / num_extra_time_resolution_pts
-        extra_time_resolution_dt = (timestep_1 - timestep_0) / num_extra_time_resolution_pts
+        T_slopes = (T_along_chord_1 - T_along_chord_0) / num_extra_time_resolution_bins
+        extra_time_resolution_dt = (timestep_1 - timestep_0) / num_extra_time_resolution_bins
 
         for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
             nes_neutron_flux_along_chord_0 = \
@@ -157,9 +151,9 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
                 base_nes_neutron_flux_along_chord_1 * (BASE_NES_DIST**2 / nes_plasma_dist**2)
 
             nes_neutron_flux_slopes = (nes_neutron_flux_along_chord_1 - nes_neutron_flux_along_chord_0) / \
-                                                                                 num_extra_time_resolution_pts
+                                                                                 num_extra_time_resolution_bins
 
-            for i_time_resolution in range(num_extra_time_resolution_pts):
+            for i_time_resolution in range(num_extra_time_resolution_bins):
                 interpolated_neutron_flux_along_chord_0 = \
                     nes_neutron_flux_along_chord_0 + (i_time_resolution * nes_neutron_flux_slopes)
                 interpolated_neutron_flux_along_chord_1 = \
@@ -171,10 +165,10 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
                 # print(f'max Rel T change: {np.nanmax(abs(interpolated_T_along_chord_1 - interpolated_T_along_chord_0)/(0.5*(interpolated_T_along_chord_1 + interpolated_T_along_chord_0)))}')
 
                 #Manually integrate neutron flux over time to get yield
-                yields_along_chord[i_equil*num_extra_time_resolution_pts + i_time_resolution, i_nes_plasma_dist] = \
+                yields_along_chord[i_equil*num_extra_time_resolution_bins + i_time_resolution, i_nes_plasma_dist] = \
                     0.5 * extra_time_resolution_dt * \
                         (interpolated_neutron_flux_along_chord_0 + interpolated_neutron_flux_along_chord_1) 
-                Ts_along_chord[i_equil*num_extra_time_resolution_pts + i_time_resolution, i_nes_plasma_dist] = \
+                Ts_along_chord[i_equil*num_extra_time_resolution_bins + i_time_resolution, i_nes_plasma_dist] = \
                     0.5 * (interpolated_T_along_chord_0 + interpolated_T_along_chord_1)
             
     os.makedirs(plot_output_dir, exist_ok=True)
@@ -187,14 +181,16 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
         plt.yscale('log')
         plt.title(f'Neutron Temp in Last 10us of Shot\nNES Dist to Plasma: {nes_plasma_dist}m')
         plt.savefig(os.path.join(plot_output_dir, f'{nes_plasma_dist}m.png'))
-        plt.clf()
+        plt.close()
 
-def plot_function_of_psibar(ax: matplotlib.axes.Axes, parser: BaseFlagshipsParser, function_of_psibar: Callable[[float], float], colorbar_label='', n_contours=10, contour_values=None):
+def plot_function_of_psibar(ax: matplotlib.axes.Axes, parser: BaseFlagshipsParser,
+                             function_of_psibar: Callable[[float], float], colorbar_label='',
+                             n_contours=10, contour_values=None):
     psibar_field = asNumpyArray(parser.GetPsiBarField().DOFValues)
     function_field = function_of_psibar(psibar_field)
 
     if contour_values == None:
-        contour_values = np.linspace(np.min(function_field), np.max(function_field), n_contours+1)[1:]
+        contour_values = np.linspace(np.min(function_field), np.max(function_field)*.99, n_contours+1)[1:]
 
     function_data = FunctionData(function_field, parser.cs_helper)
 
@@ -204,9 +200,6 @@ def plot_function_of_psibar(ax: matplotlib.axes.Axes, parser: BaseFlagshipsParse
     for i_contour_value, contour_value in enumerate(contour_values):
         color=cmap(norm(contour_value))
         contours = parser.cs_helper.GetContours(contour_value, function_data)
-        # closed_contour = Contour.GetClosedContour(contours, parser.get_lcfs().OPoint.Point)
-        # closed_contour.PrepareForPlotting(function_data)
-        # Plot2ndOrderContour(parser.cs_helper, closed_contour, color=color, function=function_data, axes=ax)
         for contour in contours:
             if contour.IsClosed:
                 contour.PrepareForPlotting(function_data)
@@ -224,7 +217,7 @@ def make_n_and_T_profile_plots():
     equil_filepaths = [equil_filepaths[i] for i in equil_timesteps_order]
     equil_timesteps = equil_timesteps[equil_timesteps_order] 
 
-    n_pts = 100
+    n_pts = 1000
     chord_xs = np.linspace(CHORD['x1'], CHORD['x2'], n_pts)
     chord_ys = np.linspace(CHORD['y1'], CHORD['y2'], n_pts)
     chord_zs = np.linspace(CHORD['z1'], CHORD['z2'], n_pts)
@@ -246,7 +239,7 @@ def make_n_and_T_profile_plots():
         fig, axs = plt.subplots(1, 2, figsize=(15, 6))
 
         neutron_lum_callable = lambda psibar: parser.calc_DD_neutron_luminosity(n_e_callable(psibar), T_e_callable(psibar))
-        
+                
         plot_function_of_psibar(axs[0], parser, neutron_lum_callable, colorbar_label='Neutron Luminosity (n s^-1 m^-3)')
         plot_function_of_psibar(axs[1], parser, T_e_callable, colorbar_label='$T_i$ (eV)')
 
@@ -260,14 +253,13 @@ def make_n_and_T_profile_plots():
             axs[i_axis].set_ylim([np.min(edge_values[:, 1])-.1, np.max(edge_values[:, 1])+.1])
         
         plt.suptitle(f'Compression time: {t}s')
-        plt.savefig(os.path.join(OUTPUT_DIR, plot_loc_dir, str(t)+'.png'))
+        plt.savefig(os.path.join(OUTPUT_DIR, plot_loc_dir, f'{t:.6f}.png'))
+        plt.close(fig)
 
 def generate_outputs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     make_n_and_T_profile_plots()
-
-    breakpoint()
 
     neutron_yield_df = get_neutron_yield_df()
 
@@ -278,7 +270,7 @@ def generate_outputs():
     plt.ylabel('Peak Ion Temperature (keV)')
     plt.yscale('log')
     plt.savefig(os.path.join(OUTPUT_DIR, 'peak_T_i_vs_t.png'))
-    plt.clf()
+    plt.close()
     
     # Plot of neutron production rate (neutrons/s) vs compression time
     plt.plot(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
@@ -286,7 +278,7 @@ def generate_outputs():
     plt.ylabel('Neutron Production Rate (1/s)')
     plt.yscale('log')
     plt.savefig(os.path.join(OUTPUT_DIR, 'n_yield_vs_t.png'))
-    plt.clf()
+    plt.close()
 
     # Total neutron production yield from a shot
     total_neutron_production = integrate.trapezoid(neutron_yield_df['neutron rate(s^-1)'], neutron_yield_df['time(s)'])
@@ -294,8 +286,8 @@ def generate_outputs():
         f.write(str(int(total_neutron_production)))
 
     # NES
-    # nes_plasma_dists = np.arange(3, 11)
-    nes_plasma_dists = np.arange(3, 5)
+    nes_plasma_dists = np.arange(3, 11)
+    # nes_plasma_dists = np.arange(3, 5)
     nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
     
     # Peak neutron rate at spectrometer
@@ -316,7 +308,7 @@ def generate_outputs():
         plt.title(f'NES Dist to Plasma: {nes_distance_str}')
         plt.yscale('log')
         plt.savefig(os.path.join(nes_rate_vs_time_dirname, nes_distance_str))
-        plt.clf()
+        plt.close()
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
     # min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
