@@ -11,6 +11,7 @@ from scipy import integrate
 from scipy import interpolate
 
 from flagships.post_processing.ParseFlagshipsFile import BaseFlagshipsParser, FlagshipsParser2
+from flagships.post_processing.postproc_utils import extend_chord_to_z_value
 from flagships.post_processing.EquilibriumPlotting import Plot2ndOrderContour
 from flagships.Csharp.csharp_utils import asNetArray, asNumpyArray, set_debug_mode, append_gf_recon_dll_path
 
@@ -25,14 +26,14 @@ UNEXTENDED_CHORD = {'r_collimator': 0.0075, 'dist_to_plasma': 3, 'chord_name': '
          'r2': 1.4548300691146028, 'x1': -0.03204, 'x2': 0.9022, 'y1': -0.07625, 'y2': 1.1413, 'z1': 0.0, 'z2': 2.0}
 
 MIN_REACTION_VESSEL_Z = -0.5767828282828283
-CHORD = FlagshipsParser2.extend_chord_to_z_value(UNEXTENDED_CHORD, MIN_REACTION_VESSEL_Z)
+CHORD = extend_chord_to_z_value(UNEXTENDED_CHORD, MIN_REACTION_VESSEL_Z)
 
 EQUIL_DIR = 'csim_027c_equil'
 OUTPUT_DIR = 'neutron_calcs_out'
 
 PSIBAR_PROFILE = np.linspace(0, 1, 101)
-# BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
-BASE_T_e = 50 + 250*(1-PSIBAR_PROFILE)
+BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
+# BASE_T_e = 50 + 250*(1-PSIBAR_PROFILE)
 BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
 
 BASE_NES_DIST = CHORD['dist_to_plasma']
@@ -108,13 +109,13 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
     equil_timesteps_order = np.argsort(equil_timesteps)
 
     equil_filepaths_past_min_timestep = [equil_filepaths_past_min_timestep[i] for i in equil_timesteps_order]
-    equil_timesteps = equil_timesteps[equil_timesteps_order]    
+    equil_timesteps = equil_timesteps[equil_timesteps_order]
 
-    num_chord_points = 1000
     num_extra_time_resolution_bins = 500 # To get finer temperature resolution for numerical integration using midpoint method
+    num_time_points = (len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_bins
+    num_chord_points = 1000
     
-    yields_along_chord = np.empty(((len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_bins, \
-                                    len(nes_plasma_dists), num_chord_points))
+    yields_along_chord = np.empty((num_time_points, len(nes_plasma_dists), num_chord_points))
     Ts_along_chord = np.copy(yields_along_chord)
 
     for i_equil in range(len(equil_filepaths_past_min_timestep)-1):
@@ -172,6 +173,33 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
                     0.5 * (interpolated_T_along_chord_0 + interpolated_T_along_chord_1)
             
     os.makedirs(plot_output_dir, exist_ok=True)
+
+    timestep_interpolator = interpolate.interp1d([0, 1], equil_timesteps)
+    interpolated_timesteps_indices = np.linspace(0, 1, num_time_points) 
+    interpolated_timesteps = timestep_interpolator(interpolated_timesteps_indices)
+
+    chord_xs = np.linspace(CHORD['x1'], CHORD['x2'], num_chord_points)
+    chord_ys = np.linspace(CHORD['y1'], CHORD['y2'], num_chord_points)
+    chord_zs = np.linspace(CHORD['z1'], CHORD['z2'], num_chord_points)
+    chord_rs = np.sqrt(chord_xs**2 + chord_ys**2)
+
+    min_nes_n_dist_yields_along_chord = yields_along_chord[:, 0, :]
+    min_nes_dist_Ts_along_chord = Ts_along_chord[:, 0, :]
+    breakpoint()
+
+    min_nes_dist_n_yields_along_chord_vs_time = np.hstack((interpolated_timesteps[np.newaxis].T, min_nes_n_dist_yields_along_chord))
+    min_nes_dist_Ts_along_chord_vs_time = np.hstack((interpolated_timesteps[np.newaxis].T, min_nes_dist_Ts_along_chord))
+
+    column_names = ['t(s)'] + [f'chord_point_{i}' for i in range(num_chord_points)]
+    min_nes_dist_n_yields_along_chord_df = pd.DataFrame(min_nes_dist_n_yields_along_chord_vs_time, columns=column_names)
+    min_nes_dist_Ts_along_chord_df = pd.DataFrame(min_nes_dist_Ts_along_chord_vs_time, columns=column_names)
+
+    min_nes_dist_n_yields_along_chord_df.to_csv(os.path.join(OUTPUT_DIR, '3m_nes_dist_n_yield_along_chord.csv'), index=False)
+    min_nes_dist_Ts_along_chord_df.to_csv(os.path.join(OUTPUT_DIR, '3m_nes_dist_Ts_along_chord.csv'), index=False)
+
+    chord_data = np.hstack((chord_xs[np.newaxis].T, chord_ys[np.newaxis].T, chord_zs[np.newaxis].T, chord_rs[np.newaxis].T))
+    chord_points_df = pd.DataFrame(chord_data, columns=['x', 'y', 'z', 'r'])
+    chord_points_df.to_csv(os.path.join(OUTPUT_DIR, 'chord_points.csv'), index=False)
 
     for i_nes_plasma_dist, nes_plasma_dist in enumerate(nes_plasma_dists):
         plt.hist(Ts_along_chord[:, i_nes_plasma_dist, :].flatten(),  \
@@ -259,56 +287,56 @@ def make_n_and_T_profile_plots():
 def generate_outputs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    make_n_and_T_profile_plots()
+    # # make_n_and_T_profile_plots()
 
-    neutron_yield_df = get_neutron_yield_df()
+    # neutron_yield_df = get_neutron_yield_df()
 
-    #Plot of peak ion temperature vs compression time
-    peak_ion_temps = np.array([get_T_e_callable_at_time(time)(1) for time in neutron_yield_df['time(s)']])
-    plt.plot(neutron_yield_df['time(s)'], peak_ion_temps*1e-3)
-    plt.xlabel('Compression Time (s)')
-    plt.ylabel('Peak Ion Temperature (keV)')
-    plt.yscale('log')
-    plt.savefig(os.path.join(OUTPUT_DIR, 'peak_T_i_vs_t.png'))
-    plt.close()
+    # #Plot of peak ion temperature vs compression time
+    # peak_ion_temps = np.array([get_T_e_callable_at_time(time)(1) for time in neutron_yield_df['time(s)']])
+    # plt.plot(neutron_yield_df['time(s)'], peak_ion_temps*1e-3)
+    # plt.xlabel('Compression Time (s)')
+    # plt.ylabel('Peak Ion Temperature (keV)')
+    # plt.yscale('log')
+    # plt.savefig(os.path.join(OUTPUT_DIR, 'peak_T_i_vs_t.png'))
+    # plt.close()
     
-    # Plot of neutron production rate (neutrons/s) vs compression time
-    plt.plot(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
-    plt.xlabel('Compression Time (s)')
-    plt.ylabel('Neutron Production Rate (1/s)')
-    plt.yscale('log')
-    plt.savefig(os.path.join(OUTPUT_DIR, 'n_yield_vs_t.png'))
-    plt.close()
+    # # Plot of neutron production rate (neutrons/s) vs compression time
+    # plt.plot(neutron_yield_df['time(s)'], neutron_yield_df['neutron rate(s^-1)'])
+    # plt.xlabel('Compression Time (s)')
+    # plt.ylabel('Neutron Production Rate (1/s)')
+    # plt.yscale('log')
+    # plt.savefig(os.path.join(OUTPUT_DIR, 'n_yield_vs_t.png'))
+    # plt.close()
 
-    # Total neutron production yield from a shot
-    total_neutron_production = integrate.trapezoid(neutron_yield_df['neutron rate(s^-1)'], neutron_yield_df['time(s)'])
-    with open(os.path.join(OUTPUT_DIR, 'total_neutron_production.txt'), 'w') as f:
-        f.write(str(int(total_neutron_production)))
+    # # Total neutron production yield from a shot
+    # total_neutron_production = integrate.trapezoid(neutron_yield_df['neutron rate(s^-1)'], neutron_yield_df['time(s)'])
+    # with open(os.path.join(OUTPUT_DIR, 'total_neutron_production.txt'), 'w') as f:
+    #     f.write(str(int(total_neutron_production)))
 
     # NES
     nes_plasma_dists = np.arange(3, 11)
-    # nes_plasma_dists = np.arange(3, 5)
-    nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
+    # # nes_plasma_dists = np.arange(3, 5)
+    # nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
     
-    # Peak neutron rate at spectrometer
-    peak_nes_rates = nes_plasma_dist_df.loc[:, nes_plasma_dist_df.columns != 'time(s)'].max()
-    peak_nes_rates_df = pd.DataFrame(np.hstack((nes_plasma_dists[np.newaxis].T, peak_nes_rates.values[np.newaxis].T)), 
-                                     columns=['NES Plasma Distance (m)', 'Peak NES Rate (1/s)'])
-    peak_nes_rates_df.to_csv(os.path.join(OUTPUT_DIR,'peak_nes_rates.csv'), index=False)
+    # # Peak neutron rate at spectrometer
+    # peak_nes_rates = nes_plasma_dist_df.loc[:, nes_plasma_dist_df.columns != 'time(s)'].max()
+    # peak_nes_rates_df = pd.DataFrame(np.hstack((nes_plasma_dists[np.newaxis].T, peak_nes_rates.values[np.newaxis].T)), 
+    #                                  columns=['NES Plasma Distance (m)', 'Peak NES Rate (1/s)'])
+    # peak_nes_rates_df.to_csv(os.path.join(OUTPUT_DIR,'peak_nes_rates.csv'), index=False)
 
-    # Plot of neutron rate at spectrometer vs compression time
-    nes_rate_vs_time_dirname = os.path.join(OUTPUT_DIR, 'nes_rate_vs_time_plots')
-    os.makedirs(nes_rate_vs_time_dirname, exist_ok=True)
-    non_time_columns = [colname for colname in nes_plasma_dist_df.columns if 'time' not in colname]
-    for colname in non_time_columns:
-        nes_distance_str = colname[colname.find(':')+2:]
-        plt.plot(nes_plasma_dist_df['time(s)'], nes_plasma_dist_df[colname])
-        plt.xlabel('time(s)')
-        plt.ylabel('Neutron Rate at NES (1/s)')
-        plt.title(f'NES Dist to Plasma: {nes_distance_str}')
-        plt.yscale('log')
-        plt.savefig(os.path.join(nes_rate_vs_time_dirname, nes_distance_str))
-        plt.close()
+    # # Plot of neutron rate at spectrometer vs compression time
+    # nes_rate_vs_time_dirname = os.path.join(OUTPUT_DIR, 'nes_rate_vs_time_plots')
+    # os.makedirs(nes_rate_vs_time_dirname, exist_ok=True)
+    # non_time_columns = [colname for colname in nes_plasma_dist_df.columns if 'time' not in colname]
+    # for colname in non_time_columns:
+    #     nes_distance_str = colname[colname.find(':')+2:]
+    #     plt.plot(nes_plasma_dist_df['time(s)'], nes_plasma_dist_df[colname])
+    #     plt.xlabel('time(s)')
+    #     plt.ylabel('Neutron Rate at NES (1/s)')
+    #     plt.title(f'NES Dist to Plasma: {nes_distance_str}')
+    #     plt.yscale('log')
+    #     plt.savefig(os.path.join(nes_rate_vs_time_dirname, nes_distance_str))
+    #     plt.close()
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
     # min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
