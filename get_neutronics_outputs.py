@@ -32,8 +32,8 @@ EQUIL_DIR = 'csim_027c_equil'
 OUTPUT_DIR = 'neutron_calcs_out'
 
 PSIBAR_PROFILE = np.linspace(0, 1, 101)
-BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
-# BASE_T_e = 50 + 250*(1-PSIBAR_PROFILE)
+# BASE_T_e = 300*np.ones_like(PSIBAR_PROFILE) 
+BASE_T_e = 50 + 250*(1-PSIBAR_PROFILE)
 BASE_n_e = 4e19*(1 - (2/3)*PSIBAR_PROFILE - (1/3)*PSIBAR_PROFILE**4)
 
 BASE_NES_DIST = CHORD['dist_to_plasma']
@@ -103,13 +103,16 @@ def get_nes_plasma_dist_df(nes_plasma_dists: np.ndarray):
 def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float, ion_temp_bins: np.ndarray, plot_output_dir: str):
     equil_filepaths = [equil_name for equil_name in os.listdir(EQUIL_DIR) if equil_name.endswith('.hdf5')]
 
-    equil_filepaths_past_min_timestep = [filepath for filepath in equil_filepaths if float(filepath[-13:-5]) > min_timestep]
+    equil_filepaths_past_min_timestep = [filepath for filepath in equil_filepaths if float(filepath[-13:-5]) >= min_timestep] 
     equil_timesteps = np.array([float(filepath[-13:-5]) for filepath in equil_filepaths_past_min_timestep])
 
     equil_timesteps_order = np.argsort(equil_timesteps)
 
     equil_filepaths_past_min_timestep = [equil_filepaths_past_min_timestep[i] for i in equil_timesteps_order]
     equil_timesteps = equil_timesteps[equil_timesteps_order]
+
+    if min_timestep != equil_timesteps[0]:
+        raise Exception('Need to add in interpolation between equil before and after min timestep cutoff')
 
     num_extra_time_resolution_bins = 500 # To get finer temperature resolution for numerical integration using midpoint method
     num_time_points = (len(equil_filepaths_past_min_timestep)-1)*num_extra_time_resolution_bins
@@ -174,7 +177,7 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
             
     os.makedirs(plot_output_dir, exist_ok=True)
 
-    timestep_interpolator = interpolate.interp1d([0, 1], equil_timesteps)
+    timestep_interpolator = interpolate.interp1d(np.linspace(0, 1, len(equil_timesteps)), equil_timesteps)
     interpolated_timesteps_indices = np.linspace(0, 1, num_time_points) 
     interpolated_timesteps = timestep_interpolator(interpolated_timesteps_indices)
 
@@ -185,7 +188,6 @@ def get_nes_temperature_hists(nes_plasma_dists: np.ndarray, min_timestep: float,
 
     min_nes_n_dist_yields_along_chord = yields_along_chord[:, 0, :]
     min_nes_dist_Ts_along_chord = Ts_along_chord[:, 0, :]
-    breakpoint()
 
     min_nes_dist_n_yields_along_chord_vs_time = np.hstack((interpolated_timesteps[np.newaxis].T, min_nes_n_dist_yields_along_chord))
     min_nes_dist_Ts_along_chord_vs_time = np.hstack((interpolated_timesteps[np.newaxis].T, min_nes_dist_Ts_along_chord))
@@ -316,7 +318,7 @@ def generate_outputs():
     # NES
     nes_plasma_dists = np.arange(3, 11)
     # # nes_plasma_dists = np.arange(3, 5)
-    # nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
+    nes_plasma_dist_df = get_nes_plasma_dist_df(nes_plasma_dists)
     
     # # Peak neutron rate at spectrometer
     # peak_nes_rates = nes_plasma_dist_df.loc[:, nes_plasma_dist_df.columns != 'time(s)'].max()
@@ -339,8 +341,8 @@ def generate_outputs():
     #     plt.close()
 
     # Histogram of number of neutrons produced vs temperature during the final 10 us of compression time, 1 keV binning; 
-    # min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
-    min_timestep = PLASMA_DATA_DF['t(s)'].max() - 10e-6
+    min_timestep = nes_plasma_dist_df['time(s)'].max() - 10e-6
+    # min_timestep = PLASMA_DATA_DF['t(s)'].max() - 10e-6
     nes_hists_dirname = os.path.join(OUTPUT_DIR, 'nes_final_10us_hists')
     ion_temp_bins = np.arange(1, 11)*1.0e3
 
